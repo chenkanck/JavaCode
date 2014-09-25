@@ -20,9 +20,12 @@
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 
 import com.amazonaws.AmazonServiceException;
@@ -53,6 +56,11 @@ import com.amazonaws.services.ec2.model.StartInstancesRequest;
 import com.amazonaws.services.ec2.model.StopInstancesRequest;
 import com.amazonaws.services.ec2.model.Tag;
 import com.amazonaws.services.ec2.model.TerminateInstancesRequest;
+import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.ChannelExec;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
+import com.jcraft.jsch.Session;
 
 
 public class AwsSample {
@@ -65,8 +73,8 @@ public class AwsSample {
      */
 
     static AmazonEC2      ec2;
-    public static final String KEYNAME = "JavaEC2Key2";
-    public static final String SG_NAME = "JavaSecurityGroup2";
+    public static final String KEYNAME = "JavaEC2Key";
+    public static final String SG_NAME = "JavaSecurityGroup";
     public static final String INS_NAME = "kc2386_FirstInstance";
     
     public static void main(String[] args) throws Exception {
@@ -221,6 +229,11 @@ public class AwsSample {
             output.write(privateKey);
             output.close();
             System.out.println("PrivateKeyPair is downloaded");
+//            keyFile.setReadable(true);
+//            keyFile.setExecutable(true);
+//            keyFile.setWritable(true);
+            Runtime.getRuntime().exec( "chmod 400 "+ "/Users/Modoka/Desktop/"+KEYNAME+".pem");
+            System.out.println("PrivateKeyPair Permission is modified.");
             /*********************************************
              * 
              *  #6 Create an Instance
@@ -262,35 +275,9 @@ public class AwsSample {
 	            System.out.println("## New instance is:"+ targetState);
 	            if (targetState.equals("running"))
 	            	break;
-//            	boolean found = false;
-//            	DescribeInstancesResult describeInstancesRequest1 = ec2.describeInstances();
-//	            List<Reservation> reservations1 = describeInstancesRequest1.getReservations();
-//	            Set<Instance> instances1 = new HashSet<Instance>();
-//	            // add all instances to a Set.
-//	            for (Reservation reservation : reservations1) {
-//	            	instances1.addAll(reservation.getInstances());
-//	            }
-//	            String tmpinstanceId =null;
-//	            System.out.println("You have " + instances1.size() + " Amazon EC2 instance(s).");
-//	            for (Instance ins : instances1){
-//	            	
-//	            	// instance id
-//	            	tmpinstanceId = ins.getInstanceId();
-//	            	// instance state
-//	            	InstanceState is = ins.getState();
-//	            	System.out.println(tmpinstanceId+" "+is.getName());
-//	            	if ((is.getName().equals("running"))&&(tmpinstanceId.equals(createdInstanceId)))
-//	            		{
-//	            			found = true;
-//	            			targetInstance = ins;
-//	            		}
-//	            }
-//	            if (found)
-//	            	break;
             }
-            
-            
-            System.out.println("Public DNS of Newinstance:"+ targetInstance.getPublicDnsName());
+            String publicDNSName = targetInstance.getPublicDnsName();
+            System.out.println("Public DNS of Newinstance:"+ publicDNSName);
         	System.out.println("Public IP of Newinstance:"+ targetInstance.getPublicIpAddress());
         	System.out.println("Private IP of Newinstance:"+ targetInstance.getPrivateIpAddress());
             
@@ -314,7 +301,74 @@ public class AwsSample {
              * Programmatically SSH to instance 
              */
             System.out.println("#kc SSh");
-                        
+            
+    		Session session = null;
+    		Channel openChannel = null;
+    		String keyDir = "/Users/Modoka/Desktop/"+KEYNAME+".pem";
+    		String user = "ec2-user";
+    		String host = publicDNSName;
+    		String command = "/sbin/ifconfig eth0;ls -a;";
+    		boolean isConnect = false;
+    		while (!isConnect) {
+    			JSch jsch = new JSch();
+    			System.out.println("Waiting 30 seconds for SSH being available.");
+    			Thread.sleep(30*1000);
+    			try {
+	    			jsch.addIdentity(keyDir);
+	    			}
+	    		catch (JSchException e){
+	    			System.out.println(e.getMessage());
+	    			}
+	    		try {
+	    				session = jsch.getSession(user, host, 22);
+	    				Properties config = new Properties();
+	    				config.put("StrictHostKeyChecking", "no");
+	    				session.setConfig(config);
+	    				session.connect();
+	    				System.out.println("SSH Connection Established.");
+	    				isConnect= true;
+	    				openChannel= session.openChannel("exec");
+	    				((ChannelExec)openChannel).setCommand(command);
+	    				openChannel.setInputStream(null);
+	    				((ChannelExec)openChannel).setErrStream(System.err);
+	    				
+	    				int exitStatus = openChannel.getExitStatus();
+	    				System.out.println("exit-status: "+exitStatus);		
+	    				InputStream in = openChannel.getInputStream();
+	    				System.out.println("Exxcute remote cammand :"+command);
+	    				openChannel.connect();
+	
+	    				byte[] tmp=new byte[1024];
+	    				while(true){
+	    					while(in.available()>0){
+	    						int i=in.read(tmp, 0, 1024);
+	    						if(i<0)break;
+	    						System.out.print(new String(tmp, 0, i));
+	    				}
+	    					if(openChannel.isClosed()){
+	    						if(in.available()>0) continue;
+	    						System.out.println("exit-status: "+openChannel.getExitStatus());
+	    						break;
+	    					}
+	    					try {Thread.sleep(1000);} catch (Exception ee){}	
+	    				}
+	    			}
+	    		catch (JSchException | IOException e){
+	    			System.out.println(e.getMessage());
+	    		}
+	    		finally {
+	    			if (openChannel !=null && !openChannel.isClosed()) {
+	    				openChannel.disconnect();
+	    				System.out.println("Channel Disconnected");
+	    			}
+	    			if (session != null && session.isConnected())
+	    			{
+	    				session.disconnect();
+	    				System.out.println("Session Disconnected");
+	    			}
+	    		}
+	    		
+    		}
             /*********************************************
              * 
              *  #8 Stop/Start an Instance
